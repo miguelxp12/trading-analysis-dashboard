@@ -3,14 +3,13 @@ import { ref, onMounted } from 'vue';
 import Papa from 'papaparse';
 import PriceChart from './charts/PriceChart.vue';
 import VolumeChart from './charts/VolumeChart.vue';
-import SignalDistribution from './charts/SignalDistribution.vue';
+// SignalDistribution import removed
 
 const originalData = ref([]);
 const featuresData = ref([]);
-const numberOfCandles = ref(100); // Default to 100 candles
 
 // Store the raw fetched data to avoid re-fetching
-const rawOriginalData = ref([]);
+const rawOriginalData = ref([]); // This will now hold all original candle data
 
 const processOriginalDataRow = (row) => {
   const timestamp = new Date(row.timestamp);
@@ -61,35 +60,16 @@ const loadOriginalCandleData = async () => {
       console.error('Parsed original data is not an array:', parsedResult);
       rawOriginalData.value = [];
     } else {
-      // Store all valid processed rows first
+      // Store all valid processed rows
       rawOriginalData.value = parsedResult.data
         .map(processOriginalDataRow)
         .filter(row => row !== null);
-      // Then apply slicing based on numberOfCandles
-      applyCandleLimit();
+      originalData.value = rawOriginalData.value; // Display all loaded original data
     }
   } catch (error) {
     console.error('Failed to load original candle data:', error.message);
     rawOriginalData.value = [];
     originalData.value = []; // Ensure displayed data is reset on error
-  }
-};
-
-const applyCandleLimit = () => {
-  if (rawOriginalData.value.length === 0) {
-    originalData.value = [];
-    return;
-  }
-  const numCandles = parseInt(numberOfCandles.value, 10);
-  if (isNaN(numCandles) || numCandles <= 0) {
-    // If input is invalid, default to a sensible value or all data
-    originalData.value = rawOriginalData.value.slice(0, 100); // Default to 100 or all
-    console.warn(`Invalid number of candles: ${numberOfCandles.value}. Defaulting to 100.`);
-    numberOfCandles.value = 100; // Reset the input if invalid
-  } else if (numCandles > rawOriginalData.value.length) {
-    originalData.value = rawOriginalData.value; // Show all available if requested is too high
-  } else {
-    originalData.value = rawOriginalData.value.slice(0, numCandles);
   }
 };
 
@@ -125,38 +105,49 @@ const loadFeaturesSignalData = async () => {
   }
 };
 
-import { watch } from 'vue';
+import { computed } from 'vue';
 
 const loadAllData = async () => {
-  // Only fetch if raw data is not already loaded
-  if (rawOriginalData.value.length === 0) {
-    await loadOriginalCandleData();
-  } else {
-    // If raw data exists, just re-apply slicing
-    applyCandleLimit();
-  }
-  // Features data is independent of numberOfCandles for now
-  if (featuresData.value.length === 0) {
-    await loadFeaturesSignalData();
-  }
+  await loadOriginalCandleData(); // Always load full original data
+  await loadFeaturesSignalData(); // Always load full features data
 };
 
-watch(numberOfCandles, (newValue, oldValue) => {
-  const num = parseInt(newValue, 10);
-  // Basic validation before re-processing
-  if (isNaN(num) || num < 10) {
-    numberOfCandles.value = 10; // Enforce minimum
-    // console.warn("Number of candles cannot be less than 10.");
-    // No need to call applyCandleLimit here, the corrected value will trigger the watcher again.
-    return;
+const signalPoints = computed(() => {
+  if (!rawOriginalData.value.length || !featuresData.value.length) {
+    return [];
   }
-  if (num > 5000 && rawOriginalData.value.length > 5000) { // Arbitrary reasonable max if data is huge
-     numberOfCandles.value = 5000;
-    // console.warn("Number of candles capped at 5000 for performance.");
-    return;
+
+  // rawOriginalData.value already has Date objects for timestamps.
+  // We'll create a map from their epoch time for faster lookups.
+  const priceDataMap = new Map(
+    rawOriginalData.value.map(data => [data.timestamp.getTime(), data.close])
+  );
+
+  const points = [];
+  for (const signal of featuresData.value) {
+    if (signal.label && (signal.label.toUpperCase() === 'BUY' || signal.label.toUpperCase() === 'SELL')) {
+      // Assuming signal.timestamp is a string that needs to be converted to a Date object
+      const signalDate = new Date(signal.timestamp);
+      const signalTime = signalDate.getTime();
+      if (isNaN(signalTime)) {
+        console.warn(`Invalid timestamp in features data: ${signal.timestamp}. Skipping signal.`);
+        continue;
+      }
+
+      if (priceDataMap.has(signalTime)) {
+        points.push({
+          x: signalDate, // Use the Date object for Chart.js
+          y: priceDataMap.get(signalTime),
+          type: signal.label.toUpperCase(), // Ensure type is consistent (BUY/SELL)
+        });
+      } else {
+         // Optional: console.warn for signals without matching price data
+         // console.warn(`No matching price data found for signal at timestamp: ${signal.timestamp} (Epoch: ${signalTime})`);
+      }
+    }
   }
-  applyCandleLimit();
-}, { immediate: false }); // immediate: false, to avoid running on initial setup if not needed before rawOriginalData is populated.
+  return points;
+});
 
 onMounted(() => {
   loadAllData(); // Initial data load
@@ -166,27 +157,16 @@ onMounted(() => {
 <template>
   <div class="trading-dashboard">
     <h1>Dashboard de Trading PEPE/USDT</h1>
-    <div class="controls-container">
-      <label for="numberOfCandlesInput">Número de Velas:</label>
-      <input
-        id="numberOfCandlesInput"
-        type="number"
-        v-model.number="numberOfCandles"
-        min="10"
-        max="5000" 
-        step="10"
-      />
-    </div>
+    <!-- Controls container removed -->
     <div class="charts-container">
       <div class="chart">
-        <PriceChart :data="originalData" />
+        <!-- Pass signalPoints to PriceChart in a later step -->
+        <PriceChart :data="originalData" :signals="signalPoints" />
       </div>
       <div class="chart">
         <VolumeChart :data="originalData" />
       </div>
-      <div class="chart">
-        <SignalDistribution :data="featuresData" />
-      </div>
+      <!-- SignalDistribution component usage removed -->
     </div>
   </div>
 </template>
@@ -201,33 +181,10 @@ onMounted(() => {
 h1 {
   text-align: center;
   margin-bottom: 2rem;
-  color: #2c3e50; /* Using a color from base.css potentially */
+  color: var(--vt-c-indigo); /* Using a color from base.css */
 }
 
-.controls-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-bottom: 2rem;
-  gap: 0.5rem;
-  background-color: var(--color-background-soft, #f8f8f8); /* Using CSS var from base.css */
-  padding: 1rem;
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
-}
-
-.controls-container label {
-  font-weight: bold;
-  color: var(--color-text, #2c3e50);
-}
-
-.controls-container input[type="number"] {
-  padding: 0.5rem;
-  border: 1px solid var(--color-border, #ccc);
-  border-radius: 4px;
-  width: 80px; /* Adjust as needed */
-  text-align: right;
-}
+/* .controls-container styling removed as the container is deleted */
 
 .charts-container {
   display: flex;
