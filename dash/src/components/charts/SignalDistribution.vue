@@ -29,7 +29,17 @@ const props = defineProps({
 
 const chartData = computed(() => {
   const signalCounts = props.data.reduce((acc, curr) => {
-    const label = curr.label || 'HOLD';
+    let label = curr.label;
+    if (label == null || label === '') { // Explicitly check for null, undefined, or empty string
+      label = 'HOLD';
+    } else if (typeof label === 'string' && label.toUpperCase() === 'BUY') {
+      label = 'BUY';
+    } else if (typeof label === 'string' && label.toUpperCase() === 'SELL') {
+      label = 'SELL';
+    } else if (label !== 'BUY' && label !== 'SELL' && label !== 'HOLD') {
+      console.warn(`Unexpected signal value: "${curr.label}". Defaulting to "HOLD".`);
+      label = 'HOLD';
+    }
     acc[label] = (acc[label] || 0) + 1;
     return acc;
   }, {});
